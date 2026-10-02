@@ -1,0 +1,19 @@
+[project]
+name = "photo-opu"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+dependencies = [
+    "matplotlib>=3.10.8",
+    "numpy>=2.4.3",
+    "pandas>=3.0.1",
+    "ipykernel>=6.29.5",
+    "opencv-python>=5.0.0.93",
+    "opencv-contrib-python>=5.0.0.93",
+]
+
+[dependency-groups]
+dev = [    
+    "mypy>=1.19.1",
+    "ruff>=0.1.0",
+]
