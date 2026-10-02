@@ -44,11 +44,18 @@ class ArucoDetect:
     def _create_detector_params() -> cv2.aruco.DetectorParameters:
         params = cv2.aruco.DetectorParameters()
         params.adaptiveThreshWinSizeMin = 3
-        params.adaptiveThreshWinSizeMax = 23
-        params.adaptiveThreshWinSizeStep = 10
-        params.minMarkerPerimeterRate = 0.03
+        params.adaptiveThreshWinSizeMax = 53
+        params.adaptiveThreshWinSizeStep = 7
+        params.minMarkerPerimeterRate = 0.02
         params.maxMarkerPerimeterRate = 4.0
-        params.polygonalApproxAccuracyRate = 0.03
+        params.polygonalApproxAccuracyRate = 0.05
+        params.minMarkerDistanceRate = 0.05
+        params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        params.cornerRefinementWinSize = 5
+        params.cornerRefinementMaxIterations = 50
+        params.cornerRefinementMinAccuracy = 0.01
+        params.perspectiveRemovePixelPerCell = 8
+        params.perspectiveRemoveIgnoredMarginPerCell = 0.2
         return params
 
     def get_camera_matrix(
