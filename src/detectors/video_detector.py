@@ -7,6 +7,8 @@ import numpy as np
 from src.base.aruco_detector import ArucoDetect, DetectionResult, MarkerPose
 
 
+SMOOTHING = 0.9
+
 class VideoArucoDetector(ArucoDetect):
     def __init__(
         self,
@@ -16,10 +18,13 @@ class VideoArucoDetector(ArucoDetect):
         dist_coeffs: np.ndarray | None = None,
         axis_length: float = 0.03,
         draw_distances: bool = True,
+        smoothing: float = SMOOTHING,
     ) -> None:
         super().__init__(marker_size, dict_id, camera_matrix, dist_coeffs)
         self.axis_length = axis_length
         self.draw_distances = draw_distances
+        self.smoothing = smoothing
+        self._smooth_state: dict[int, np.ndarray] = {}
 
     def process(
         self,
@@ -45,6 +50,7 @@ class VideoArucoDetector(ArucoDetect):
         frame_index = 0
 
         try:
+            self._smooth_state.clear()
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -52,6 +58,7 @@ class VideoArucoDetector(ArucoDetect):
 
                 frame_index += 1
                 corners, ids = self.detect(frame)
+                corners = self._smooth(corners, ids)
                 poses = self.estimate_poses(corners, ids, camera_matrix, dist_coeffs)
                 output = self.draw(
                     frame, corners, ids, poses, axis_length=self.axis_length
@@ -112,3 +119,21 @@ class VideoArucoDetector(ArucoDetect):
                 1,
                 cv2.LINE_AA,
             )
+
+    def _smooth(
+            self,
+            corners: tuple[np.ndarray, ...],
+            ids: np.ndarray | None,
+    ) -> tuple[np.ndarray, ...]:
+        if ids is None or self.smoothing >= 1.0:
+            return corners
+        result: list[np.ndarray] = []
+        for corner, marker_id in zip(corners, ids):
+            key = int(marker_id)
+            pts = corner[0].astype(np.float32)
+            previous = self._smooth_state.get(key)
+            if previous is not None:
+                pts = self.smoothing * pts + (1.0 - self.smoothing) * previous
+            self._smooth_state[key] = pts
+            result.append(pts.reshape(1, 4, 2))
+        return tuple(result)
