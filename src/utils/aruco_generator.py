@@ -19,8 +19,18 @@ def generate_aruco_markers(
     output_dir: Path | str | None = None,
     start_id: int = 0,
 ) -> list[Path]:
-    """Генерирует ArUco-метки заданного типа и сохраняет их в PNG."""    
-    
+    """Генерация ArUco-метки заданного типа и сохраняет их в PNG.
+
+    params
+        count: количество меток
+        marker_type: тип словаря ("4x4", "5x5", "6x6", "7x7")
+        image_size: сторона изображения метки в пикселях
+        output_dir: каталог сохранения
+        start_id: первый ID генерируемых меток
+
+    returns:
+        saved: список путей к сохранённым PNG-файлам
+    """
     if marker_type not in ARUCO_DICTS:
         available = ", ".join(ARUCO_DICTS)
         raise ValueError(f"Неизвестный тип метки: {marker_type}. Доступны: {available}")

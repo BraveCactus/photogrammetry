@@ -14,6 +14,18 @@ class PhotoArucoDetector(ArucoDetect):
         save: bool = True,
         axis_length: float | None = None,
     ) -> DetectionResult: 
+        """Обработка одиночного фото: детекция, позы, отрисовка и сохранение.
+
+        params
+            image_path: путь к изображению
+            output_path: путь для сохранения результата
+            show: показывать ли результат в окне OpenCV
+            save: сохранять ли результат
+            axis_length: длина осей координат
+
+        returns:
+            result: результат детекции DetectionResult
+        """
         image = cv2.imread(str(image_path))
         if image is None:
             raise FileNotFoundError(f"Не удалось открыть {image_path}")

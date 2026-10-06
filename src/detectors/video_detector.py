@@ -21,6 +21,19 @@ class VideoArucoDetector(ArucoDetect):
         track_margin: float = 0.5,
         max_missing: int = 10,
     ) -> None:
+        """Инициализация видеодетектора ArUco.
+
+        params
+            marker_size: физический размер метки в метрах
+            dict_id: идентификатор словаря ArUco
+            camera_matrix: матрица камеры (3x3)
+            dist_coeffs: коэффициенты дисторсии
+            axis_length: длина осей координат
+            draw_distances: рисовать ли расстояния до меток
+            smoothing: коэффициент EMA-сглаживания
+            track_margin: запас области поиска при отслеживании
+            max_missing: число кадров, после которых метка считается пропавшей
+        """
         super().__init__(marker_size, dict_id, camera_matrix, dist_coeffs)
 
         self.axis_length = axis_length
@@ -47,6 +60,16 @@ class VideoArucoDetector(ArucoDetect):
         output_path: str | Path | None = None,
         show: bool = False,
     ) -> Iterator[DetectionResult]:
+        """Покадровая обработка видео и выдача результатов детекции.
+
+        params
+            video_path: путь к видео
+            output_path: путь для сохранения результата
+            show: показывать ли результат в окне OpenCV
+
+        returns:
+            результаты: генератор результатов DetectionResult по кадрам
+        """
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise FileNotFoundError(f"Не удалось открыть видео {video_path}")
@@ -116,6 +139,14 @@ class VideoArucoDetector(ArucoDetect):
         ids: np.ndarray | None,
         poses: list[MarkerPose],
     ) -> None:
+        """Отрисовка расстояний до каждой метки на изображении.
+
+        params
+            image: изображение для подписей
+            corners: углы маркеров
+            ids: идентификаторы маркеров
+            poses: оценённые позы
+        """
         if ids is None or not poses:
             return
 
@@ -144,6 +175,15 @@ class VideoArucoDetector(ArucoDetect):
             corners: tuple[np.ndarray, ...],
             ids: np.ndarray | None,
     ) -> tuple[np.ndarray, ...]:
+        """Сглаживание углов маркеров по предыдущим кадрам (EMA).
+
+        params
+            corners: углы маркеров
+            ids: идентификаторы маркеров
+
+        returns:
+            result: сглаженные углы маркеров
+        """
         if ids is None or self.smoothing >= 1.0:
             return corners
         result: list[np.ndarray] = []
@@ -163,6 +203,17 @@ class VideoArucoDetector(ArucoDetect):
             corners: tuple[np.ndarray, ...],
             ids: np.ndarray | None,
     ) -> tuple[tuple[np.ndarray, ...], np.ndarray | None]:
+        """Отслеживание пропавших маркеров по области последнего кадра.
+
+        params
+            image: текущий кадр
+            corners: углы маркеров
+            ids: идентификаторы маркеров
+
+        returns:
+            tracked_corners: обновлённые углы маркеров
+            tracked_ids: обновлённые идентификаторы маркеров
+        """
         current: dict[int, np.ndarray] = {}
         if ids is not None:
             for corner, marker_id in zip(corners, ids):
@@ -203,6 +254,16 @@ class VideoArucoDetector(ArucoDetect):
         marker_id: int,
         last_corners: np.ndarray,
     ) -> np.ndarray | None:
+        """Поиск маркера в ограниченной области вокруг последнего положения.
+
+        params
+            image: текущий кадр
+            marker_id: идентификатор искомого маркера
+            last_corners: последние известные углы маркера
+
+        returns:
+            corners: найденные углы маркера (None, если не найден)
+        """
         x, y, w, h = cv2.boundingRect(last_corners)
         mx = int(w * self.track_margin)
         my = int(h * self.track_margin)
