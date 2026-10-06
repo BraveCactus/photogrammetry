@@ -45,7 +45,7 @@ class ArucoDetect:
         params = cv2.aruco.DetectorParameters()
         params.adaptiveThreshWinSizeMin = 3
         params.adaptiveThreshWinSizeMax = 53
-        params.adaptiveThreshWinSizeStep = 7
+        params.adaptiveThreshWinSizeStep = 3
         params.minMarkerPerimeterRate = 0.02
         params.maxMarkerPerimeterRate = 4.0
         params.polygonalApproxAccuracyRate = 0.05

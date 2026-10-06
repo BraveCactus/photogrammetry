@@ -6,7 +6,6 @@ import numpy as np
 
 from src.base.aruco_detector import ArucoDetect, DetectionResult, MarkerPose
 
-
 SMOOTHING = 0.9
 
 class VideoArucoDetector(ArucoDetect):
@@ -19,12 +18,28 @@ class VideoArucoDetector(ArucoDetect):
         axis_length: float = 0.03,
         draw_distances: bool = True,
         smoothing: float = SMOOTHING,
+        track_margin: float = 0.5,
+        max_missing: int = 10,
     ) -> None:
         super().__init__(marker_size, dict_id, camera_matrix, dist_coeffs)
+
         self.axis_length = axis_length
         self.draw_distances = draw_distances
+        # ema-сглаживание
         self.smoothing = smoothing
         self._smooth_state: dict[int, np.ndarray] = {}
+        # roi-поиск
+        self.track_margin = track_margin
+        self.max_missing = max_missing
+        self._track_state: dict[int, np.ndarray] = {}
+        self._missing: dict[int, int] = {}
+
+        soft_params = self._create_detector_params()
+        soft_params.minMarkerPerimeterRate = 0.005
+        soft_params.adaptiveThreshWinSizeMax = 23
+        soft_params.adaptiveThreshWinSizeStep = 3
+
+        self._soft_detector = cv2.aruco.ArucoDetector(self.aruco_dict, soft_params)
 
     def process(
         self,
@@ -51,6 +66,9 @@ class VideoArucoDetector(ArucoDetect):
 
         try:
             self._smooth_state.clear()
+            self._track_state.clear()
+            self._missing.clear()
+
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -58,6 +76,7 @@ class VideoArucoDetector(ArucoDetect):
 
                 frame_index += 1
                 corners, ids = self.detect(frame)
+                corners, ids = self._track(frame, corners, ids)
                 corners = self._smooth(corners, ids)
                 poses = self.estimate_poses(corners, ids, camera_matrix, dist_coeffs)
                 output = self.draw(
@@ -137,3 +156,74 @@ class VideoArucoDetector(ArucoDetect):
             self._smooth_state[key] = pts
             result.append(pts.reshape(1, 4, 2))
         return tuple(result)
+
+    def _track(
+            self,
+            image: np.ndarray,
+            corners: tuple[np.ndarray, ...],
+            ids: np.ndarray | None,
+    ) -> tuple[tuple[np.ndarray, ...], np.ndarray | None]:
+        current: dict[int, np.ndarray] = {}
+        if ids is not None:
+            for corner, marker_id in zip(corners, ids):
+                current[int(marker_id)] = corner[0].astype(np.float32)
+
+        for marker_id in list(self._track_state):
+            if marker_id in current:
+                self._missing[marker_id] = 0
+                continue
+
+            self._missing[marker_id] = self._missing.get(marker_id, 0) + 1
+            if self._missing[marker_id] > self.max_missing:
+                del self._track_state[marker_id]
+                del self._missing[marker_id]
+                continue
+
+            recovered = self._detect_in_roi(
+                image, marker_id, self._track_state[marker_id]
+            )
+            if recovered is not None:
+                current[marker_id] = recovered
+                self._missing[marker_id] = 0
+
+        self._track_state.update(current)
+        if not current:
+            return (), None
+
+        items = sorted(current.items())
+        tracked_corners = tuple(
+            pts.reshape(1, 4, 2).astype(np.float32) for _, pts in items
+        )
+        tracked_ids = np.array([marker_id for marker_id, _ in items], dtype=np.int32)
+        return tracked_corners, tracked_ids
+
+    def _detect_in_roi(
+        self,
+        image: np.ndarray,
+        marker_id: int,
+        last_corners: np.ndarray,
+    ) -> np.ndarray | None:
+        x, y, w, h = cv2.boundingRect(last_corners)
+        mx = int(w * self.track_margin)
+        my = int(h * self.track_margin)
+        x0, y0 = max(0, x - mx), max(0, y - my)
+        x1 = min(image.shape[1], x + w + mx)
+        y1 = min(image.shape[0], y + h + my)
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            return None
+
+        roi = image[y0:y1, x0:x1]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
+        roi_corners, roi_ids, _ = self._soft_detector.detectMarkers(gray)
+        if roi_ids is None:
+            return None
+
+        offset = np.array([x0, y0], dtype=np.float32)
+        for corner, rid in zip(roi_corners, roi_ids):
+            if int(rid) == marker_id:
+                return corner[0].astype(np.float32) + offset
+        return None
+
+
+
+
