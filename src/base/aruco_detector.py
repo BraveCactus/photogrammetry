@@ -4,6 +4,12 @@ from typing import cast
 import cv2
 import numpy as np
 
+ARUCO_DICT_NAMES: dict[int, str] = {
+    value: name.removeprefix("DICT_").split("_")[0]
+    for name, value in vars(cv2.aruco).items()
+    if name.startswith("DICT_") and isinstance(value, int)
+}
+
 
 @dataclass
 class MarkerPose:
@@ -46,12 +52,22 @@ class ArucoDetect:
             dist_coeffs: коэффициенты дисторсии
         """
         self.marker_size = marker_size
+        self.dict_id = dict_id
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(dict_id)
         self.detector_params = self._create_detector_params()
         self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.detector_params)
         self.camera_matrix = camera_matrix
         self.dist_coeffs = (dist_coeffs if dist_coeffs is not None 
                              else np.zeros((5, 1), dtype=np.float64))
+
+    @property
+    def marker_type(self) -> str:
+        """Короткий вид словаря меток, например 4X4.
+
+        returns:
+            name: короткое имя типа меток
+        """
+        return ARUCO_DICT_NAMES.get(self.dict_id, str(self.dict_id))
 
     @staticmethod
     def _create_detector_params() -> cv2.aruco.DetectorParameters:

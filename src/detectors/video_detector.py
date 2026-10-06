@@ -1,3 +1,4 @@
+import csv
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -80,12 +81,18 @@ class VideoArucoDetector(ArucoDetect):
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         camera_matrix, dist_coeffs = self.get_camera_matrix(width, height)
 
+        stats_path: Path | None = None
         writer: cv2.VideoWriter | None = None
         if output_path is not None:
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             fourcc = cv2.VideoWriter.fourcc(*"mp4v")
             writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+            stats_path = output_path.with_suffix(".csv")
 
         frame_index = 0
+        frames_with_markers = 0
+        seen_ids: set[int] = set()
 
         try:
             self._smooth_state.clear()
@@ -113,6 +120,8 @@ class VideoArucoDetector(ArucoDetect):
                     writer.write(output)
 
                 if ids is not None:
+                    frames_with_markers += 1
+                    seen_ids.update(int(marker_id) for marker_id in ids)
                     print(f"Кадр {frame_index}/{total_frames}: ID {ids.tolist()}")
 
                 if show:
@@ -131,6 +140,46 @@ class VideoArucoDetector(ArucoDetect):
             cap.release()
             if writer is not None:
                 writer.release()
+            if stats_path is not None:
+                self._save_stats(
+                    stats_path,
+                    Path(video_path).name,
+                    frame_index,
+                    frames_with_markers,
+                    seen_ids,
+                )
+
+    def _save_stats(
+        self,
+        path: Path,
+        video_name: str,
+        frames_total: int,
+        frames_with_markers: int,
+        marker_ids: set[int],
+    ) -> None:
+        """Сохранение статистики прогона видео в CSV.
+
+        params
+            path: путь к CSV-файлу
+            video_name: имя исходного видео
+            frames_total: число обработанных кадров
+            frames_with_markers: число кадров с найденными метками
+            marker_ids: множество найденных ID меток
+        """
+        with path.open("w", newline="", encoding="utf-8-sig") as file:
+            writer = csv.writer(file, delimiter=";")
+            writer.writerow(
+                ["video", "marker type", "detected markers", "frames amount", "frames with markers"]
+            )
+            writer.writerow(
+                [
+                    video_name,
+                    self.marker_type,
+                    len(marker_ids),
+                    frames_total,
+                    frames_with_markers,
+                ]
+            )
 
     @staticmethod
     def _draw_distances(
