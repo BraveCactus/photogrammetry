@@ -1,4 +1,5 @@
 import csv
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -93,6 +94,7 @@ class VideoArucoDetector(ArucoDetect):
         frame_index = 0
         frames_with_markers = 0
         seen_ids: set[int] = set()
+        total_frame_time = 0.0
 
         try:
             self._smooth_state.clear()
@@ -105,6 +107,9 @@ class VideoArucoDetector(ArucoDetect):
                     break
 
                 frame_index += 1
+
+                start = time.perf_counter()
+                
                 corners, ids = self.detect(frame)
                 corners, ids = self._track(frame, corners, ids)
                 corners = self._smooth(corners, ids)
@@ -118,6 +123,8 @@ class VideoArucoDetector(ArucoDetect):
 
                 if writer is not None:
                     writer.write(output)
+
+                total_frame_time += time.perf_counter() - start
 
                 if ids is not None:
                     frames_with_markers += 1
@@ -141,12 +148,16 @@ class VideoArucoDetector(ArucoDetect):
             if writer is not None:
                 writer.release()
             if stats_path is not None:
+                avg_frame_ms = (
+                    total_frame_time / frame_index * 1000 if frame_index else 0.0
+                )
                 self._save_stats(
                     stats_path,
                     Path(video_path).name,
                     frame_index,
                     frames_with_markers,
                     seen_ids,
+                    avg_frame_ms,
                 )
 
     def _save_stats(
@@ -156,6 +167,8 @@ class VideoArucoDetector(ArucoDetect):
         frames_total: int,
         frames_with_markers: int,
         marker_ids: set[int],
+        avg_frame_ms: float,
+        
     ) -> None:
         """Сохранение статистики прогона видео в CSV.
 
@@ -165,11 +178,12 @@ class VideoArucoDetector(ArucoDetect):
             frames_total: число обработанных кадров
             frames_with_markers: число кадров с найденными метками
             marker_ids: множество найденных ID меток
+            avg_frame_ms: количество милисекунд, которое тратит алгоритм на обработку одного кадра
         """
         with path.open("w", newline="", encoding="utf-8-sig") as file:
             writer = csv.writer(file, delimiter=";")
             writer.writerow(
-                ["video", "marker type", "detected markers", "frames amount", "frames with markers"]
+                ["video", "marker type", "detected markers", "frames amount", "frames with markers", "average ms per frame"]
             )
             writer.writerow(
                 [
@@ -178,6 +192,7 @@ class VideoArucoDetector(ArucoDetect):
                     len(marker_ids),
                     frames_total,
                     frames_with_markers,
+                    round(avg_frame_ms, 2)
                 ]
             )
 
