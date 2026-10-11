@@ -18,6 +18,7 @@ def generate_aruco_markers(
     image_size: int = 512,
     output_dir: Path | str | None = None,
     start_id: int = 0,
+    name: str = None,
 ) -> list[Path]:
     """Генерация ArUco-метки заданного типа и сохраняет их в PNG.
 
@@ -49,7 +50,8 @@ def generate_aruco_markers(
     saved: list[Path] = []
     for marker_id in range(start_id, start_id + count):
         marker = cv2.aruco.generateImageMarker(dictionary, marker_id, image_size)
-        path = target_dir / f"aruco_{marker_id}.png"
+        stem = name if name is not None else f"aruco_{marker_id}"
+        path = target_dir / f"{name}.png"
         cv2.imwrite(str(path), marker)
         saved.append(path)
     return saved
