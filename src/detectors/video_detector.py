@@ -1,4 +1,5 @@
 import csv
+import json
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -9,6 +10,14 @@ import numpy as np
 from src.base.aruco_detector import ArucoDetect, DetectionResult, MarkerPose
 
 SMOOTHING = 0.9
+
+POSE_COLUMNS = [
+    "frame_index", "time_s", "marker_id", "is_reference",
+    "x_cam", "y_cam", "z_cam", "dist_cam",
+    "rvec_cam_x", "rvec_cam_y", "rvec_cam_z",
+    "x_world", "y_world", "z_world",
+    "rvec_world_x", "rvec_world_y", "rvec_world_z",
+]
 
 class VideoArucoDetector(ArucoDetect):
     def __init__(
@@ -22,6 +31,7 @@ class VideoArucoDetector(ArucoDetect):
         smoothing: float = SMOOTHING,
         track_margin: float = 0.5,
         max_missing: int = 10,
+        reference_marker_id: int | None = None,   # если None, то мир = камера
     ) -> None:
         """Инициализация видеодетектора ArUco.
 
@@ -56,6 +66,8 @@ class VideoArucoDetector(ArucoDetect):
 
         self._soft_detector = cv2.aruco.ArucoDetector(self.aruco_dict, soft_params)
 
+        self.reference_marker_id = reference_marker_id
+
     def process(
         self,
         video_path: str | Path,
@@ -83,6 +95,9 @@ class VideoArucoDetector(ArucoDetect):
         camera_matrix, dist_coeffs = self.get_camera_matrix(width, height)
 
         stats_path: Path | None = None
+        pose_csv_path: Path | None = None
+        pose_json_path: Path | None = None
+
         writer: cv2.VideoWriter | None = None
         if output_path is not None:
             output_path = Path(output_path)
@@ -90,11 +105,18 @@ class VideoArucoDetector(ArucoDetect):
             fourcc = cv2.VideoWriter.fourcc(*"mp4v")
             writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
             stats_path = output_path.with_suffix(".csv")
+            pose_csv_path = output_path.with_name(f"{output_path.stem}_poses.csv")
+            pose_json_path = output_path.with_name(f"{output_path.stem}_poses.json")
 
         frame_index = 0
         frames_with_markers = 0
         seen_ids: set[int] = set()
         total_frame_time = 0.0
+
+        pose_rows: list[dict] = []
+        world_transform: np.ndarray | None = (
+            np.eye(4) if self.reference_marker_id is None else None
+        )
 
         try:
             self._smooth_state.clear()
@@ -114,6 +136,21 @@ class VideoArucoDetector(ArucoDetect):
                 corners, ids = self._track(frame, corners, ids)
                 corners = self._smooth(corners, ids)
                 poses = self.estimate_poses(corners, ids, camera_matrix, dist_coeffs)
+
+                if world_transform is None:
+                    reference = next(
+                        (p for p in poses if p.id == self.reference_marker_id), None
+                    )
+                    if reference is not None:
+                        world_transform = np.linalg.inv(
+                            self.pose_matrix(reference.rvec, reference.tvec)
+                        )
+                time_s = frame_index / fps if fps else 0.0
+                pose_rows.extend(
+                    self._pose_row(frame_index, time_s, pose, world_transform)
+                    for pose in poses
+                )
+
                 output = self.draw(
                     frame, corners, ids, poses, axis_length=self.axis_length
                 )
@@ -159,6 +196,13 @@ class VideoArucoDetector(ArucoDetect):
                     seen_ids,
                     avg_frame_ms,
                 )
+                self._save_poses(
+                    pose_rows,
+                    pose_csv_path,
+                    pose_json_path,
+                    Path(video_path).name,
+                    self.reference_marker_id,
+                )
 
     def _save_stats(
         self,
@@ -168,7 +212,6 @@ class VideoArucoDetector(ArucoDetect):
         frames_with_markers: int,
         marker_ids: set[int],
         avg_frame_ms: float,
-        
     ) -> None:
         """Сохранение статистики прогона видео в CSV.
 
@@ -195,6 +238,74 @@ class VideoArucoDetector(ArucoDetect):
                     round(avg_frame_ms, 2)
                 ]
             )
+
+    def _pose_row(
+        self,
+        frame_index: int,
+        time_s: float,
+        pose: MarkerPose,
+        world_transform: np.ndarray | None,
+    ) -> dict:
+        rvec, tvec = pose.rvec.flatten(), pose.tvec.flatten()
+        row: dict = {
+            "frame_index": frame_index,
+            "time_s": round(time_s, 3),
+            "marker_id": pose.id,
+            "is_reference": pose.id == self.reference_marker_id,
+            "x_cam": round(float(tvec[0]), 4),
+            "y_cam": round(float(tvec[1]), 4),
+            "z_cam": round(float(tvec[2]), 4),
+            "dist_cam": round(float(np.linalg.norm(tvec)), 4),
+            "rvec_cam_x": round(float(rvec[0]), 4),
+            "rvec_cam_y": round(float(rvec[1]), 4),
+            "rvec_cam_z": round(float(rvec[2]), 4),
+            "x_world": None, "y_world": None, "z_world": None,
+            "rvec_world_x": None, "rvec_world_y": None, "rvec_world_z": None,
+        }
+        if world_transform is not None:
+            rvec_world, tvec_world = self.transform_pose(pose.rvec, pose.tvec, world_transform)
+            row.update(
+                x_world=round(float(tvec_world[0]), 4),
+                y_world=round(float(tvec_world[1]), 4),
+                z_world=round(float(tvec_world[2]), 4),
+                rvec_world_x=round(float(rvec_world[0]), 4),
+                rvec_world_y=round(float(rvec_world[1]), 4),
+                rvec_world_z=round(float(rvec_world[2]), 4),
+            )
+        return row
+
+    @staticmethod
+    def _save_poses(
+        rows: list[dict],
+        csv_path: Path,
+        json_path: Path,
+        video_name: str,
+        reference_marker_id: int | None,
+    ) -> None:
+        with csv_path.open("w", newline="", encoding="utf-8-sig") as file:
+            writer = csv.writer(file, delimiter=";")
+            writer.writerow(POSE_COLUMNS)
+            for row in rows:
+                writer.writerow(
+                    "" if row[c] is None else row[c] for c in POSE_COLUMNS
+                )
+
+        frames: dict[int, dict] = {}
+        for row in rows:
+            frame = frames.setdefault(
+                row["frame_index"],
+                {"frame_index": row["frame_index"], "time_s": row["time_s"], "markers": []},
+            )
+            frame["markers"].append(
+                {k: v for k, v in row.items() if k not in ("frame_index", "time_s")}
+            )
+        payload = {
+            "video": video_name,
+            "reference_marker_id": reference_marker_id,
+            "frames": list(frames.values()),
+        }
+        with json_path.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
 
     @staticmethod
     def _draw_distances(

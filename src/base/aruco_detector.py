@@ -192,8 +192,10 @@ class ArucoDetect:
         if not ok:
             return False, None, None, None
 
-        rotation, _ = cv2.Rodrigues(rvec)
-        center_3d = (-rotation.T @ tvec).flatten()
+        # rotation, _ = cv2.Rodrigues(rvec)
+        # center_3d = (-rotation.T @ tvec).flatten()
+
+        center_3d = tvec.flatten()
         return True, rvec, tvec, center_3d
 
     def estimate_poses(
@@ -227,6 +229,26 @@ class ArucoDetect:
                 continue
             poses.append(MarkerPose(int(marker_id), rvec, tvec, center_3d))
         return poses
+
+    @staticmethod
+    def pose_matrix(rvec: np.ndarray, tvec: np.ndarray) -> np.ndarray:
+        """Матрица 4x4 (поворот + перенос) из rvec/tvec."""
+        rotation, _ = cv2.Rodrigues(np.asarray(rvec, dtype=np.float64))
+        matrix = np.eye(4, dtype=np.float64)
+        matrix[:3, :3] = rotation
+        matrix[:3, 3] = np.asarray(tvec, dtype=np.float64).flatten()
+        return matrix
+
+    @staticmethod
+    def transform_pose(
+        rvec: np.ndarray,
+        tvec: np.ndarray,
+        transform: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Перенос позы метки в другую систему координат."""
+        result = transform @ ArucoDetect.pose_matrix(rvec, tvec)
+        rvec_new, _ = cv2.Rodrigues(result[:3, :3])
+        return rvec_new.flatten(), result[:3, 3].flatten()
 
     def draw(
         self,
