@@ -11,6 +11,10 @@ from src.base.aruco_detector import ArucoDetect, DetectionResult, MarkerPose
 
 SMOOTHING = 0.9
 
+# Пояснение:  Blender-камера имеет ориентацию (X вправо, Y вверх, -Z вперёд)
+# а OpenCV-камера (X вправо, Y вниз, +Z вперёд)
+MODEL_CAM_TO_CV = np.diag([1.0, -1.0, -1.0, 1.0])
+
 POSE_COLUMNS = [
     "frame_index", "time_s", "marker_id", "is_reference",
     "x_cam", "y_cam", "z_cam", "dist_cam",
@@ -32,6 +36,8 @@ class VideoArucoDetector(ArucoDetect):
         track_margin: float = 0.5,
         max_missing: int = 10,
         reference_marker_id: int | None = None,   # если None, то мир = камера
+        camera_name: str | None = None,
+        world_from_camera: np.ndarray | None = None,
     ) -> None:
         """Инициализация видеодетектора ArUco.
 
@@ -45,6 +51,9 @@ class VideoArucoDetector(ArucoDetect):
             smoothing: коэффициент EMA-сглаживания
             track_margin: запас области поиска при отслеживании
             max_missing: число кадров, после которых метка считается пропавшей
+            reference_marker_id: ID опорного маркера для мировой СК
+            camera_name: имя камеры для экспорта ground truth
+            world_from_camera: матрица T_WC (камера -> мир)
         """
         super().__init__(marker_size, dict_id, camera_matrix, dist_coeffs)
 
@@ -67,6 +76,17 @@ class VideoArucoDetector(ArucoDetect):
         self._soft_detector = cv2.aruco.ArucoDetector(self.aruco_dict, soft_params)
 
         self.reference_marker_id = reference_marker_id
+        self.camera_name = camera_name
+        self.world_from_camera = (
+            None
+            if world_from_camera is None
+            else np.asarray(world_from_camera, dtype=np.float64)
+        )
+        if (
+            self.world_from_camera is not None
+            and self.world_from_camera.shape != (4, 4)
+        ):
+            raise ValueError("world_from_camera должен быть матрицей 4x4")
 
     def process(
         self,
@@ -114,9 +134,14 @@ class VideoArucoDetector(ArucoDetect):
         total_frame_time = 0.0
 
         pose_rows: list[dict] = []
-        world_transform: np.ndarray | None = (
-            np.eye(4) if self.reference_marker_id is None else None
-        )
+        world_transform: np.ndarray | None
+        if self.world_from_camera is not None:
+            # T_WC задана в СК Blender, поэтому переводим в OpenCV-камеру.
+            world_transform = self.world_from_camera @ MODEL_CAM_TO_CV
+        elif self.reference_marker_id is None:
+            world_transform = np.eye(4)
+        else:
+            world_transform = None
 
         try:
             self._smooth_state.clear()
@@ -145,7 +170,7 @@ class VideoArucoDetector(ArucoDetect):
                         world_transform = np.linalg.inv(
                             self.pose_matrix(reference.rvec, reference.tvec)
                         )
-                time_s = frame_index / fps if fps else 0.0
+                time_s = (frame_index - 1) / fps if fps else 0.0
                 pose_rows.extend(
                     self._pose_row(frame_index, time_s, pose, world_transform)
                     for pose in poses
@@ -184,7 +209,11 @@ class VideoArucoDetector(ArucoDetect):
             cap.release()
             if writer is not None:
                 writer.release()
-            if stats_path is not None:
+            if (
+                stats_path is not None
+                and pose_csv_path is not None
+                and pose_json_path is not None
+            ):
                 avg_frame_ms = (
                     total_frame_time / frame_index * 1000 if frame_index else 0.0
                 )
