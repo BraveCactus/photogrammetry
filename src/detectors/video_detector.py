@@ -23,6 +23,16 @@ POSE_COLUMNS = [
     "rvec_world_x", "rvec_world_y", "rvec_world_z",
 ]
 
+MEASUREMENT_PROJECTION_COLUMNS = [
+    "frame", "t", "camera", "marker_id", "visible",
+    "u0", "v0", "u1", "v1", "u2", "v2", "u3", "v3",
+]
+
+MEASUREMENT_CORNER_COLUMNS = [
+    "frame", "t", "camera", "marker_id", "visible",
+    *[f"{axis}{i}" for i in range(4) for axis in ("x", "y", "z")],
+]
+
 class VideoArucoDetector(ArucoDetect):
     def __init__(
         self,
@@ -38,6 +48,7 @@ class VideoArucoDetector(ArucoDetect):
         reference_marker_id: int | None = None,   # если None, то мир = камера
         camera_name: str | None = None,
         world_from_camera: np.ndarray | None = None,
+        save_measurements: bool = False,
     ) -> None:
         """Инициализация видеодетектора ArUco.
 
@@ -52,8 +63,9 @@ class VideoArucoDetector(ArucoDetect):
             track_margin: запас области поиска при отслеживании
             max_missing: число кадров, после которых метка считается пропавшей
             reference_marker_id: ID опорного маркера для мировой СК
-            camera_name: имя камеры для экспорта ground truth
+            camera_name: имя камеры для экспорта измерений
             world_from_camera: матрица T_WC (камера -> мир)
+            save_measurements: сохранять углы маркеров в формате model
         """
         super().__init__(marker_size, dict_id, camera_matrix, dist_coeffs)
 
@@ -82,11 +94,8 @@ class VideoArucoDetector(ArucoDetect):
             if world_from_camera is None
             else np.asarray(world_from_camera, dtype=np.float64)
         )
-        if (
-            self.world_from_camera is not None
-            and self.world_from_camera.shape != (4, 4)
-        ):
-            raise ValueError("world_from_camera должен быть матрицей 4x4")
+
+        self.save_measurements = save_measurements
 
     def process(
         self,
@@ -104,6 +113,9 @@ class VideoArucoDetector(ArucoDetect):
         returns:
             результаты: генератор результатов DetectionResult по кадрам
         """
+        if self.save_measurements and output_path is None:
+            raise ValueError("save_measurements=True требует output_path")
+
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise FileNotFoundError(f"Не удалось открыть видео {video_path}")
@@ -117,6 +129,7 @@ class VideoArucoDetector(ArucoDetect):
         stats_path: Path | None = None
         pose_csv_path: Path | None = None
         pose_json_path: Path | None = None
+        measurement_dir: Path | None = None
 
         writer: cv2.VideoWriter | None = None
         if output_path is not None:
@@ -127,6 +140,9 @@ class VideoArucoDetector(ArucoDetect):
             stats_path = output_path.with_suffix(".csv")
             pose_csv_path = output_path.with_name(f"{output_path.stem}_poses.csv")
             pose_json_path = output_path.with_name(f"{output_path.stem}_poses.json")
+            if self.save_measurements:
+                measurement_name = self.camera_name or Path(video_path).stem
+                measurement_dir = output_path.parent / "measurements" / measurement_name
 
         frame_index = 0
         frames_with_markers = 0
@@ -134,6 +150,15 @@ class VideoArucoDetector(ArucoDetect):
         total_frame_time = 0.0
 
         pose_rows: list[dict] = []
+        measurement_rows: list[
+            tuple[
+                int, float, int, np.ndarray, np.ndarray, np.ndarray | None
+            ]
+        ] = []
+        write_world = (
+            self.world_from_camera is not None
+            or self.reference_marker_id is not None
+        )
         world_transform: np.ndarray | None
         if self.world_from_camera is not None:
             # T_WC задана в СК Blender, поэтому переводим в OpenCV-камеру.
@@ -175,6 +200,40 @@ class VideoArucoDetector(ArucoDetect):
                     self._pose_row(frame_index, time_s, pose, world_transform)
                     for pose in poses
                 )
+
+                if self.save_measurements and ids is not None:
+                    corners_by_id = {
+                        int(marker_id): corner[0]
+                        for corner, marker_id in zip(corners, ids)
+                    }
+                    object_points = np.hstack(
+                        [self._object_points(), np.ones((4, 1))]
+                    )
+                    for pose in poses:
+                        uv = corners_by_id.get(pose.id)
+                        if uv is None:
+                            continue
+                        T_cv_m = self.pose_matrix(pose.rvec, pose.tvec)
+                        # MODEL_CAM_TO_CV — инволюция, поэтому она же
+                        # переводит OpenCV-камеру в Blender-камеру.
+                        x_c = (
+                            MODEL_CAM_TO_CV @ T_cv_m @ object_points.T
+                        )[:3].T
+                        x_w = None
+                        if write_world and world_transform is not None:
+                            x_w = (
+                                world_transform @ T_cv_m @ object_points.T
+                            )[:3].T
+                        measurement_rows.append(
+                            (
+                                frame_index - 1,
+                                time_s,
+                                pose.id,
+                                uv,
+                                x_c,
+                                x_w,
+                            )
+                        )
 
                 output = self.draw(
                     frame, corners, ids, poses, axis_length=self.axis_length
@@ -232,6 +291,13 @@ class VideoArucoDetector(ArucoDetect):
                     Path(video_path).name,
                     self.reference_marker_id,
                 )
+
+            if self.save_measurements and measurement_dir is not None:
+                measurement_name = self.camera_name or Path(video_path).stem
+                self._save_measurements(
+                    measurement_rows, measurement_dir, measurement_name, write_world
+                )
+                print(f"Measurements: {measurement_dir}")
 
     def _save_stats(
         self,
@@ -335,6 +401,96 @@ class VideoArucoDetector(ArucoDetect):
         }
         with json_path.open("w", encoding="utf-8") as file:
             json.dump(payload, file, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _save_measurements(
+        rows: list[
+            tuple[
+                int, float, int, np.ndarray, np.ndarray, np.ndarray | None
+            ]
+        ],
+        measurement_dir: Path,
+        camera_name: str,
+        write_world: bool,
+    ) -> None:
+        """Сохранение углов маркеров в формате model.
+
+        params
+            rows: (frame, t, marker_id, 2D-углы 4x2,
+                  3D-углы 4x3 в СК камеры,
+                  3D-углы 4x3 в мировой СК или None)
+            measurement_dir: папка measurements/<camera>
+            camera_name: имя камеры для колонки camera
+            write_world: писать ли world_corners.csv
+        """
+        measurement_dir.mkdir(parents=True, exist_ok=True)
+
+        with (measurement_dir / "projections.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as file:
+            writer = csv.writer(file, lineterminator="\n")
+            writer.writerow(MEASUREMENT_PROJECTION_COLUMNS)
+            for frame, t, marker_id, uv, _, _ in rows:
+                writer.writerow(
+                    [
+                        frame,
+                        f"{t:.9f}",
+                        camera_name,
+                        marker_id,
+                        1,
+                        *[f"{value:.6f}" for value in uv.reshape(-1)],
+                    ]
+                )
+
+        with (measurement_dir / "camera_corners.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as file:
+            writer = csv.writer(file, lineterminator="\n")
+            writer.writerow(MEASUREMENT_CORNER_COLUMNS)
+            for frame, t, marker_id, _, x_c, _ in rows:
+                writer.writerow(
+                    [
+                        frame,
+                        f"{t:.9f}",
+                        camera_name,
+                        marker_id,
+                        1,
+                        *[f"{value:.9f}" for value in x_c.reshape(-1)],
+                    ]
+                )
+
+        if not write_world:
+            print(
+                "world_corners.csv не создан: не задана T_WC "
+                "или reference_marker_id"
+            )
+            return
+
+        with (measurement_dir / "world_corners.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as file:
+            writer = csv.writer(file, lineterminator="\n")
+            writer.writerow(MEASUREMENT_CORNER_COLUMNS)
+            written = 0
+            for frame, t, marker_id, _, _, x_w in rows:
+                if x_w is None:
+                    continue
+                writer.writerow(
+                    [
+                        frame,
+                        f"{t:.9f}",
+                        camera_name,
+                        marker_id,
+                        1,
+                        *[f"{value:.9f}" for value in x_w.reshape(-1)],
+                    ]
+                )
+                written += 1
+            if written == 0:
+                print(
+                    "world_corners.csv: нет данных, "
+                    "мировая СК не определена"
+                )
 
     @staticmethod
     def _draw_distances(
