@@ -6,6 +6,8 @@ from src.base.aruco_detector import ArucoDetect, DetectionResult
 
 
 class PhotoArucoDetector(ArucoDetect):
+    """Детекция ArUco-маркеров на одиночном изображении."""
+
     def process(
         self,
         image_path: str | Path,
@@ -14,7 +16,7 @@ class PhotoArucoDetector(ArucoDetect):
         save: bool = True,
         axis_length: float | None = None,
     ) -> DetectionResult: 
-        """Обработка одиночного фото: детекция, позы, отрисовка и сохранение.
+        """Обработка одиночного фото: детекция, положение, отрисовка и сохранение.
 
         params
             image_path: путь к изображению

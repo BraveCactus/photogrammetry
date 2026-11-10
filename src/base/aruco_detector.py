@@ -13,6 +13,8 @@ ARUCO_DICT_NAMES: dict[int, str] = {
 
 @dataclass
 class MarkerPose:
+    """Положение маркера в системе координат камеры."""
+
     id: int
     rvec: np.ndarray
     tvec: np.ndarray
@@ -20,6 +22,8 @@ class MarkerPose:
 
 @dataclass
 class DetectionResult:
+    """Результат обработки кадра или изображения."""
+
     image: np.ndarray
     corners: tuple[np.ndarray, ...]
     ids: np.ndarray | None
@@ -36,6 +40,8 @@ class DetectionResult:
         return self.ids is not None and len(self.ids) > 0
 
 class ArucoDetect:
+    """Базовый детектор ArUco: поиск углов, solvePnP и отрисовка."""
+
     def __init__(
         self,
         marker_size: float = 0.2,
@@ -62,7 +68,7 @@ class ArucoDetect:
 
     @property
     def marker_type(self) -> str:
-        """Короткий вид словаря меток, например 4X4.
+        """Короткий вид словаря меток.
 
         returns:
             name: короткое имя типа меток
@@ -140,7 +146,7 @@ class ArucoDetect:
         return detected, cast(np.ndarray, ids).flatten()
 
     def _object_points(self) -> np.ndarray:
-        """Получение 3D-координат углов метки в её системе координат.
+        """Получение 3D-координат углов маркера в её системе координат.
 
         returns:
             points: массив точек углов (4x3)
@@ -161,18 +167,18 @@ class ArucoDetect:
         camera_matrix: np.ndarray | None = None,
         dist_coeffs: np.ndarray | None = None,
     ) -> tuple[bool, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-        """Оценивание позы метки через solvePnP.
+        """Оценивание положение маркера через solvePnP.
 
         params
-            img_points: 2D-координаты углов метки на изображении
+            img_points: 2D-координаты углов маркера на изображении
             camera_matrix: матрица камеры
             dist_coeffs: коэффициенты дисторсии
 
         returns:
-            ok: удалось ли оценить позу
+            ok: удалось ли оценить положение
             rvec: вектор вращения
             tvec: вектор переноса
-            center_3d: центр метки в координатах камеры
+            center_3d: центр маркера в координатах камеры
         """
         matrix = camera_matrix if camera_matrix is not None else self.camera_matrix
         coeffs = dist_coeffs if dist_coeffs is not None else self.dist_coeffs
@@ -205,7 +211,7 @@ class ArucoDetect:
         camera_matrix: np.ndarray | None = None,
         dist_coeffs: np.ndarray | None = None,
     ) -> list[MarkerPose]:
-        """Оценивание позы всех найденных маркеров.
+        """Оценивание положения всех найденных маркеров.
 
         params
             corners: углы маркеров
@@ -214,7 +220,7 @@ class ArucoDetect:
             dist_coeffs: коэффициенты дисторсии
 
         returns:
-            poses: список оценённых поз MarkerPose
+            poses: список оценённых положений MarkerPose
         """
         poses: list[MarkerPose] = []
         if ids is None:
@@ -245,7 +251,7 @@ class ArucoDetect:
         tvec: np.ndarray,
         transform: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Перенос позы метки в другую систему координат."""
+        """Перенос положения метки в другую систему координат."""
         result = transform @ ArucoDetect.pose_matrix(rvec, tvec)
         rvec_new, _ = cv2.Rodrigues(result[:3, :3])
         return rvec_new.flatten(), result[:3, 3].flatten()
@@ -264,7 +270,7 @@ class ArucoDetect:
             image: исходное изображение
             corners: углы маркеров
             ids: идентификаторы маркеров
-            poses: оценённые позы для отрисовки осей
+            poses: оценённые положения для отрисовки осей
             axis_length: длина осей координат
 
         returns:
