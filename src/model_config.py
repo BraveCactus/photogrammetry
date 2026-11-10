@@ -1,9 +1,3 @@
-"""Параметры модели ОПУ из scene.json.
-
-Загрузчик читает экспорт MATLAB/Simscape и отдаёт типизированные
-параметры камер и маркеров для детектора и экспорта измерений.
-"""
-
 from __future__ import annotations
 
 import json
@@ -106,6 +100,7 @@ class ModelConfig:
             "dist_coeffs": camera.dist,
             "camera_name": camera.name,
             "world_from_camera": camera.T_WC,
+            "scene_path": self.path,
         }
 
     def validate_video(self, camera_name: str, video_path: str | Path) -> None:

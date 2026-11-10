@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from src.base.aruco_detector import ArucoDetect, DetectionResult, MarkerPose
+from src.rotor_angles import angles_from_world_corners, load_marker_corners
 
 # Пояснение:  Blender-камера имеет ориентацию (X вправо, Y вверх, -Z вперёд)
 # а OpenCV-камера (X вправо, Y вниз, +Z вперёд)
@@ -46,6 +47,7 @@ class VideoArucoDetector(ArucoDetect):
         camera_name: str | None = None,
         world_from_camera: np.ndarray | None = None,
         save_measurements: bool = False,
+        scene_path: str | Path | None = None,
     ) -> None:
         """Инициализация видеодетектора ArUco.
 
@@ -60,6 +62,7 @@ class VideoArucoDetector(ArucoDetect):
             camera_name: имя камеры для экспорта измерений
             world_from_camera: матрица T_WC (камера -> мир)
             save_measurements: сохранять углы маркеров в формате model
+            scene_path: путь к scene.json для расчёта углов ротора
         """
         super().__init__(marker_size, dict_id, camera_matrix, dist_coeffs)
 
@@ -74,6 +77,7 @@ class VideoArucoDetector(ArucoDetect):
         )
 
         self.save_measurements = save_measurements
+        self.scene_path = None if scene_path is None else Path(scene_path)
 
     def process(
         self,
@@ -268,6 +272,16 @@ class VideoArucoDetector(ArucoDetect):
                     measurement_rows, measurement_dir, measurement_name, write_world
                 )
                 print(f"Measurements: {measurement_dir}")
+
+                if write_world and self.scene_path is not None:
+                    marker_corners = load_marker_corners(self.scene_path)
+                    angles = angles_from_world_corners(
+                        measurement_dir / "world_corners.csv",
+                        marker_corners,
+                    )
+                    angles_path = measurement_dir / "rotor_angles_measured.csv"
+                    angles.to_csv(angles_path, index=False, float_format="%.9f")
+                    print(f"Rotor angles: {angles_path}")
 
     def _save_stats(
         self,
