@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @dataclass
 class Config:
+    """Пути проекта и настройки по умолчанию."""
 
     root: Path = ROOT
 
@@ -13,6 +14,7 @@ class Config:
     model_config: Path = Path("../model/photo_opu/sim2blender/scene.json")
 
     def __post_init__(self):
+        """Разрешение относительных путей и создание выходных папок."""
         self.data_path = self.root / self.data_path
         self.output_path = self.root / self.output_path
         self.model_config = (self.root / self.model_config).resolve()
